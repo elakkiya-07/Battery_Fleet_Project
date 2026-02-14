@@ -3,119 +3,85 @@ clear;
 close all;
 
 %% =============================
-%  LOAD DATA
-% ==============================
+% LOAD DATA
+%% =============================
+filename = 'cleaned_with_monotonic_resistance.csv';   % change if needed
+data = readtable(filename, 'VariableNamingRule','preserve');
 
-filename = 'cleaned_with_monotonic_resistance.csv';
-data = readtable(filename);
+vars = data.Properties.VariableNames;
 
 %% =============================
-%  SELECT BATTERY
-% ==============================
+% AUTO-DETECT DEGRADATION COLUMN
+%% =============================
 
-batteryID = 'B5';   % Change if needed
+% Find capacity-like column
+capIdx = find(contains(vars,'BCt','IgnoreCase',true));
 
-subset = data(strcmp(data.battery_id, batteryID), :);
+if isempty(capIdx)
+    capIdx = find(contains(vars,'Discharge','IgnoreCase',true));
+end
 
-% Sort by cycle
-subset = sortrows(subset, 'cycle');
+if isempty(capIdx)
+    error('No capacity-like column found.');
+end
+
+Q = data.(vars{capIdx});
+
+% Find cycle column
+cycleIdx = find(contains(vars,'cycle','IgnoreCase',true));
+cycles = data.(vars{cycleIdx});
+
+% Sort properly
+[cycles, sortIdx] = sort(cycles);
+Q = Q(sortIdx);
 
 %% =============================
-%  EXTRACT VARIABLES
-% ==============================
+% CLEAN DATA (NO AGGRESSIVE MONOTONIC FORCING)
+%% =============================
 
-cycles = subset.cycle;
-capacity = subset.BCt;   % Battery capacity column
-
-% Remove NaN values
-validIdx = ~isnan(capacity);
-cycles = cycles(validIdx);
-capacity = capacity(validIdx);
+Q = filloutliers(Q,'linear');
+Q = movmean(Q,5);  % light smoothing only
 
 %% =============================
-%  COMPUTE SOH & FADE
-% ==============================
+% UNIVERSAL MATHEMATICAL MODEL
+%% =============================
 
-C0 = capacity(1);        % Initial capacity
-SOH = capacity / C0;     % Normalized capacity
+Q0 = Q(1);
+
+SOH = Q ./ Q0;
 fade_percent = (1 - SOH) * 100;
 
-%% =============================
-%  PLOT RAW CAPACITY
-% ==============================
+R_norm = Q0 ./ Q;   % inverse relationship
 
-figure;
-plot(cycles, capacity, 'LineWidth', 2);
-xlabel('Cycle Number');
-ylabel('Capacity (Ah)');
-title(['Raw Capacity Fade - Battery ', batteryID]);
+%% =============================
+% PLOTS
+%% =============================
+
+figure(1);
+plot(cycles, Q, 'LineWidth',2);
+xlabel('Cycle');
+ylabel('Degradation Parameter Q');
+title('Raw Degradation Trend');
 grid on;
 
-%% =============================
-%  PLOT SOH
-% ==============================
-
-figure;
-plot(cycles, SOH, 'LineWidth', 2);
-hold on;
-yline(0.8, '--r', '80% EOL');
-xlabel('Cycle Number');
-ylabel('State of Health (SOH)');
-title(['Normalized Capacity (SOH) - Battery ', batteryID]);
-grid on;
-hold off;
-
-%% =============================
-%  PLOT FADE %
-% ==============================
-
-figure;
-plot(cycles, fade_percent, 'LineWidth', 2);
-xlabel('Cycle Number');
+figure(2);
+plot(cycles, fade_percent,'LineWidth',2);
+xlabel('Cycle');
 ylabel('Capacity Fade (%)');
-title(['Capacity Fade Percentage - Battery ', batteryID]);
+title('Capacity Fade (Universal Model)');
+grid on;
+
+figure(3);
+plot(cycles, R_norm,'LineWidth',2);
+xlabel('Cycle');
+ylabel('Normalized Internal Resistance');
+title('Resistance Growth (Inverse Model)');
 grid on;
 
 %% =============================
-%  PRINT SUMMARY
-% ==============================
-
-fprintf('Initial Capacity: %.4f Ah\n', C0);
-fprintf('Final Capacity: %.4f Ah\n', capacity(end));
-fprintf('Final SOH: %.2f %%\n', SOH(end)*100);
-% Create folder if not exists
-if ~exist('plots', 'dir')
-    mkdir('plots');
-end
-
+% SUMMARY
 %% =============================
-% SAVE RESULTS INSIDE PROJECT
-% ==============================
 
-% Create folders if they don't exist
-if ~exist('plots','dir')
-    mkdir('plots');
-end
-
-if ~exist('results','dir')
-    mkdir('results');
-end
-
-% ---- Save Figures ----
-saveas(1, fullfile('plots', ['Raw_Capacity_', batteryID, '.png']));
-saveas(2, fullfile('plots', ['SOH_', batteryID, '.png']));
-saveas(3, fullfile('plots', ['Fade_Percentage_', batteryID, '.png']));
-
-% ---- Save Processed Data ----
-results = table(cycles, capacity, SOH, fade_percent);
-
-writetable(results, fullfile('results', ...
-    ['Capacity_Analysis_', batteryID, '.csv']));
-
-% ---- Save Workspace ----
-save(fullfile('results', ...
-    ['Workspace_', batteryID, '.mat']));
-
-fprintf('\nAll simulations saved inside project folder successfully.\n');
-
-
+fprintf('\nInitial Q: %.4f\n',Q0);
+fprintf('Final Q: %.4f\n',Q(end));
+fprintf('Final SOH: %.2f %%\n',SOH(end)*100);
